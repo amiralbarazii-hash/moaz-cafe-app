@@ -157,7 +157,7 @@ fun MainScreen() {
     }
 
     val tabs = if (p.canManage) {
-        listOf("المبيعات", "المشتريات", "المصروفات", "الزبائن", "المخزون", "التقارير")
+        listOf("المبيعات", "المشتريات", "المصروفات", "الزبائن", "المخزون", "المحاسبة", "التقارير")
     } else {
         listOf("المبيعات", "المشتريات", "المصروفات", "الزبائن")
     }
@@ -193,6 +193,7 @@ fun MainScreen() {
                 "المصروفات" -> ExpensesScreen(repo, p)
                 "الزبائن" -> CustomersScreen(repo, p)
                 "المخزون" -> InventoryScreen(repo)
+                "المحاسبة" -> AccountingScreen(repo)
                 "التقارير" -> ReportsScreen(repo)
             }
         }

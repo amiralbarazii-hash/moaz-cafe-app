@@ -910,3 +910,67 @@ fun InventoryScreen(repo: Repo) {
         }
     }
 }
+
+// ---------- Accounting (owner and manager) ----------
+
+@Composable
+fun AccountingScreen(repo: Repo) {
+    val sales by remember { repo.sales(true) }.collectAsState(initial = emptyList())
+    val purchases by remember { repo.purchases(true) }.collectAsState(initial = emptyList())
+    val expenses by remember { repo.expenses(true) }.collectAsState(initial = emptyList())
+
+    val journal = buildJournal(sales, purchases, expenses)
+    val trial = trialBalance(journal)
+    val totalDebit = journal.sumOf { it.debit }
+    val totalCredit = journal.sumOf { it.credit }
+    val revenue = trial.first { it.account == ACC_REVENUE }.credit
+    val spent = trial.first { it.account == ACC_EXPENSES }.debit
+
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp)) {
+        item {
+            Text("قائمة الدخل (للفترة كلها)", fontWeight = FontWeight.Bold)
+            Text("الإيرادات: ${money(revenue)} ل.س")
+            Text("المصاريف: ${money(spent)} ل.س")
+            Text(
+                "صافي الربح قبل تكلفة البضاعة المباعة: ${money(revenue - spent)} ل.س",
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "تكلفة البضاعة المباعة لسا ما انحسبت، لأن المخزون ما ربطناه بسعر الشراء بعد.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+
+            Text("ميزان المراجعة", fontWeight = FontWeight.Bold)
+            Text(
+                if (totalDebit == totalCredit) "متوازن: مدين ${money(totalDebit)} = دائن ${money(totalCredit)}"
+                else "غير متوازن! راجع القيود",
+                color = if (totalDebit == totalCredit) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+        items(trial, key = { it.account }) { row ->
+            EntryCard(
+                title = "${row.account} ${row.name}",
+                subtitle = "مدين ${money(row.debit)} - دائن ${money(row.credit)}",
+                amount = money(row.balance),
+                canDelete = false,
+                onDelete = {}
+            )
+        }
+        item {
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            Text("آخر القيود", fontWeight = FontWeight.Bold)
+        }
+        items(journal.takeLast(50).reversed()) { j ->
+            EntryCard(
+                title = "${j.ref} - ${ACCOUNT_NAMES[j.account] ?: j.account}",
+                subtitle = dateOf(j.date) + (if (j.note.isNotBlank()) " - ${j.note}" else ""),
+                amount = if (j.debit > 0) "مدين ${money(j.debit)}" else "دائن ${money(j.credit)}",
+                canDelete = false,
+                onDelete = {}
+            )
+        }
+    }
+}
+

@@ -166,6 +166,8 @@ fun buildSections(
         listOf<Any?>(c.name, credit, paid, credit - paid)
     }
 
+    val journal = buildJournal(s, p, e)
+
     // Stock is all-time: opening balance + purchases − sales − manual consumption.
     val stockRows = items.sortedBy { it.name }.map { it2 ->
         val bought = purchases.filter { p -> p.item == it2.name }.sumOf { p -> p.qty }
@@ -213,6 +215,18 @@ fun buildSections(
             "المخزون",
             listOf("الصنف", "الوحدة", "الرصيد الافتتاحي", "مشتريات", "مبيعات", "استهلاك", "الرصيد الحالي"),
             stockRows
+        ),
+        Section(
+            "القيود",
+            listOf("التاريخ", "المرجع", "الحساب", "مدين", "دائن", "ملاحظة"),
+            journal.map {
+                listOf<Any?>(stamp.format(Date(it.date)), it.ref, ACCOUNT_NAMES[it.account] ?: it.account, it.debit, it.credit, it.note)
+            }
+        ),
+        Section(
+            "ميزان المراجعة",
+            listOf("الرمز", "الحساب", "مدين", "دائن", "الرصيد"),
+            trialBalance(journal).map { listOf<Any?>(it.account, it.name, it.debit, it.credit, it.balance) }
         )
     )
 }
