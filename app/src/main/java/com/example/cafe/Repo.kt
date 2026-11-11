@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -46,7 +47,7 @@ data class Customer(val id: String, val name: String)
 
 data class Sale(
     val id: String, val date: Long, val product: String, val qty: Long, val unitPrice: Long,
-    val total: Long, val payment: String, val customer: String, val note: String,
+    val discount: Long, val total: Long, val payment: String, val customer: String, val note: String,
     val employeeId: String, val employeeEmail: String
 )
 
@@ -62,6 +63,23 @@ data class Expense(
 
 fun dayKey(ms: Long): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(ms))
 fun monthKey(ms: Long): String = SimpleDateFormat("yyyy-MM", Locale.US).format(Date(ms))
+fun dateOf(ms: Long): String = SimpleDateFormat("dd/MM/yyyy", Locale.US).format(Date(ms))
+
+fun startOfMonth(): Long = Calendar.getInstance().apply {
+    set(Calendar.DAY_OF_MONTH, 1)
+    set(Calendar.HOUR_OF_DAY, 0)
+    set(Calendar.MINUTE, 0)
+    set(Calendar.SECOND, 0)
+    set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+fun endOfDay(ms: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = ms
+    set(Calendar.HOUR_OF_DAY, 23)
+    set(Calendar.MINUTE, 59)
+    set(Calendar.SECOND, 59)
+    set(Calendar.MILLISECOND, 999)
+}.timeInMillis
 
 class Repo {
     private val db = FirebaseFirestore.getInstance()
@@ -70,8 +88,8 @@ class Repo {
     val uid: String get() = auth.currentUser?.uid ?: ""
     val email: String get() = auth.currentUser?.email ?: ""
 
-    private fun baseFields(): Map<String, Any> = mapOf(
-        "date" to System.currentTimeMillis(),
+    private fun baseFields(date: Long): Map<String, Any> = mapOf(
+        "date" to date,
         "employeeId" to uid,
         "employeeEmail" to email
     )
@@ -143,6 +161,7 @@ class Repo {
             product = d.getString("product") ?: "",
             qty = d.getLong("qty") ?: 0L,
             unitPrice = d.getLong("unitPrice") ?: 0L,
+            discount = d.getLong("discount") ?: 0L,
             total = d.getLong("total") ?: 0L,
             payment = d.getString("payment") ?: "",
             customer = d.getString("customer") ?: "",
@@ -179,14 +198,15 @@ class Repo {
     }.map { list -> list.sortedByDescending { it.date } }
 
     suspend fun addSale(
-        product: String, qty: Long, unitPrice: Long, total: Long,
+        date: Long, product: String, qty: Long, unitPrice: Long, discount: Long, total: Long,
         payment: String, customer: String, note: String
     ) {
         db.collection("sales").add(
-            baseFields() + mapOf(
+            baseFields(date) + mapOf(
                 "product" to product,
                 "qty" to qty,
                 "unitPrice" to unitPrice,
+                "discount" to discount,
                 "total" to total,
                 "payment" to payment,
                 "customer" to customer,
@@ -195,9 +215,9 @@ class Repo {
         ).await()
     }
 
-    suspend fun addPurchase(item: String, qty: Long, amount: Long, category: String, note: String) {
+    suspend fun addPurchase(date: Long, item: String, qty: Long, amount: Long, category: String, note: String) {
         db.collection("purchases").add(
-            baseFields() + mapOf(
+            baseFields(date) + mapOf(
                 "item" to item,
                 "qty" to qty,
                 "amount" to amount,
@@ -207,9 +227,9 @@ class Repo {
         ).await()
     }
 
-    suspend fun addExpense(category: String, amount: Long, note: String) {
+    suspend fun addExpense(date: Long, category: String, amount: Long, note: String) {
         db.collection("expenses").add(
-            baseFields() + mapOf(
+            baseFields(date) + mapOf(
                 "category" to category,
                 "amount" to amount,
                 "note" to note

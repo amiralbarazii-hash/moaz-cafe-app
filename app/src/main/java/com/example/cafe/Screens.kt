@@ -2,6 +2,8 @@
 
 package com.example.cafe
 
+import android.app.DatePickerDialog as AndroidDatePicker
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -23,12 +25,38 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
 fun money(v: Long): String = String.format(Locale.US, "%,d", v)
 
 private fun timeOf(ms: Long): String = SimpleDateFormat("dd/MM HH:mm", Locale.US).format(Date(ms))
+
+fun pickDate(context: Context, current: Long, onPick: (Long) -> Unit) {
+    val cal = Calendar.getInstance().apply { timeInMillis = current }
+    AndroidDatePicker(
+        context,
+        { _, y, m, d ->
+            val picked = Calendar.getInstance().apply {
+                set(y, m, d, 12, 0, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            onPick(picked.timeInMillis)
+        },
+        cal.get(Calendar.YEAR),
+        cal.get(Calendar.MONTH),
+        cal.get(Calendar.DAY_OF_MONTH)
+    ).show()
+}
+
+@Composable
+fun DateButton(label: String, millis: Long, modifier: Modifier = Modifier, onPick: (Long) -> Unit) {
+    val context = LocalContext.current
+    OutlinedButton(onClick = { pickDate(context, millis, onPick) }, modifier = modifier) {
+        Text("$label: ${dateOf(millis)}")
+    }
+}
 
 @Composable
 fun EntryCard(title: String, subtitle: String, amount: String, canDelete: Boolean, onDelete: () -> Unit) {
@@ -41,6 +69,31 @@ fun EntryCard(title: String, subtitle: String, amount: String, canDelete: Boolea
             Text(amount, fontWeight = FontWeight.Bold)
             if (canDelete) {
                 TextButton(onClick = onDelete) { Text("حذف") }
+            }
+        }
+    }
+}
+
+/** Text field with a list of matching suggestions shown right under it. */
+@Composable
+fun SuggestField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    suggestions: List<String>,
+    onPick: (String) -> Unit
+) {
+    Column(Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        suggestions.forEach { s ->
+            TextButton(onClick = { onPick(s) }, modifier = Modifier.fillMaxWidth()) {
+                Text(s, modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -80,10 +133,10 @@ fun SalesScreen(repo: Repo, profile: Profile) {
     val products by remember { repo.products() }.collectAsState(initial = emptyList())
     val customers by remember { repo.customers() }.collectAsState(initial = emptyList())
     val sales by remember(profile.isOwner) { repo.sales(profile.isOwner) }.collectAsState(initial = emptyList())
+    val pending by remember { repo.pendingCountFlow() }.collectAsState(initial = 0)
     val scope = rememberCoroutineScope()
     var showForm by remember { mutableStateOf(false) }
 
-    val pending by remember { repo.pendingCountFlow() }.collectAsState(initial = 0)
     val today = dayKey(System.currentTimeMillis())
     val todays = sales.filter { dayKey(it.date) == today }
     val cash = todays.filter { it.payment == PAY_CASH }.sumOf { it.total }
@@ -111,9 +164,10 @@ fun SalesScreen(repo: Repo, profile: Profile) {
             items(sales, key = { it.id }) { s ->
                 EntryCard(
                     title = if (s.payment == PAY_COLLECT) "تحصيل من ${s.customer}" else "${s.product} × ${s.qty}",
-                    subtitle = "${s.payment}" +
+                    subtitle = dateOf(s.date) + " - " + s.payment +
                         (if (s.customer.isNotBlank() && s.payment != PAY_CASH) " - ${s.customer}" else "") +
-                        " - ${timeOf(s.date)}",
+                        (if (s.discount > 0) " - خصم ${money(s.discount)}" else "") +
+                        (if (s.note.isNotBlank()) " - ${s.note}" else ""),
                     amount = money(s.total),
                     canDelete = profile.isOwner || s.employeeId == repo.uid,
                     onDelete = { scope.launch { repo.delete("sales", s.id) } }
@@ -127,8 +181,13 @@ fun SalesScreen(repo: Repo, profile: Profile) {
             products = products,
             customers = customers,
             onDismiss = { showForm = false },
-            onSave = { product, qty, unitPrice, total, payment, customer, note ->
-                scope.launch { repo.addSale(product, qty, unitPrice, total, payment, customer, note) }
+            onSave = { date, product, qty, unitPrice, discount, total, payment, customer, note ->
+                scope.launch {
+                    repo.addSale(date, product, qty, unitPrice, discount, total, payment, customer, note)
+                    if (customer.isNotBlank() && customers.none { it.name == customer }) {
+                        repo.addCustomer(customer)
+                    }
+                }
                 showForm = false
             }
         )
@@ -140,25 +199,44 @@ fun SaleDialog(
     products: List<Product>,
     customers: List<Customer>,
     onDismiss: () -> Unit,
-    onSave: (product: String, qty: Long, unitPrice: Long, total: Long, payment: String, customer: String, note: String) -> Unit
+    onSave: (date: Long, product: String, qty: Long, unitPrice: Long, discount: Long, total: Long, payment: String, customer: String, note: String) -> Unit
 ) {
+    var date by remember { mutableStateOf(System.currentTimeMillis()) }
     var payment by remember { mutableStateOf(PAY_CASH) }
+    var productQuery by remember { mutableStateOf("") }
     var productName by remember { mutableStateOf("") }
-    var qtyText by remember { mutableStateOf("1") }
     var priceText by remember { mutableStateOf("") }
-    var customer by remember { mutableStateOf("") }
+    var qtyText by remember { mutableStateOf("1") }
+    var discountText by remember { mutableStateOf("") }
+    var customerText by remember { mutableStateOf("") }
     var amountText by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
 
     val isCollect = payment == PAY_COLLECT
     val qty = qtyText.toLongOrNull() ?: 0L
     val price = priceText.toLongOrNull() ?: 0L
+    val discount = discountText.toLongOrNull() ?: 0L
     val amount = amountText.toLongOrNull() ?: 0L
-    val total = if (isCollect) amount else qty * price
+    val lineTotal = (qty * price - discount).coerceAtLeast(0L)
+    val total = if (isCollect) amount else lineTotal
+    val customerName = customerText.trim()
+
     val valid = if (isCollect) {
-        customer.isNotBlank() && amount > 0
+        customerName.isNotBlank() && amount > 0
     } else {
-        productName.isNotBlank() && qty > 0 && price > 0 && (payment != PAY_CREDIT || customer.isNotBlank())
+        productName.isNotBlank() && qty > 0 && price > 0 && (payment != PAY_CREDIT || customerName.isNotBlank())
+    }
+
+    val productSuggestions = if (productQuery.isBlank() || productQuery.trim() == productName) {
+        emptyList()
+    } else {
+        products.filter { it.name.contains(productQuery.trim(), ignoreCase = true) }.take(5).map { it.name }
+    }
+    val customerSuggestions = if (customerName.isBlank()) {
+        emptyList()
+    } else {
+        customers.filter { it.name.contains(customerName, ignoreCase = true) && it.name != customerName }
+            .take(5).map { it.name }
     }
 
     AlertDialog(
@@ -167,8 +245,10 @@ fun SaleDialog(
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                DateButton("التاريخ", date, Modifier.fillMaxWidth()) { date = it }
+
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     PAYMENT_TYPES.forEach { p ->
                         FilterChip(
@@ -178,8 +258,15 @@ fun SaleDialog(
                         )
                     }
                 }
+
                 if (isCollect) {
-                    PickerField("الزبون", customer, customers.map { it.name }) { customer = it }
+                    SuggestField(
+                        label = "الزبون",
+                        value = customerText,
+                        onValueChange = { customerText = it },
+                        suggestions = customerSuggestions,
+                        onPick = { customerText = it }
+                    )
                     OutlinedTextField(
                         value = amountText,
                         onValueChange = { amountText = it.filter(Char::isDigit) },
@@ -189,10 +276,17 @@ fun SaleDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
                 } else {
-                    PickerField("المادة", productName, products.map { it.name }) { name ->
-                        productName = name
-                        priceText = products.firstOrNull { it.name == name }?.price?.toString() ?: ""
-                    }
+                    SuggestField(
+                        label = "ابحث عن المادة",
+                        value = productQuery,
+                        onValueChange = { productQuery = it },
+                        suggestions = productSuggestions,
+                        onPick = { name ->
+                            productName = name
+                            productQuery = name
+                            priceText = products.firstOrNull { it.name == name }?.price?.toString() ?: ""
+                        }
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = qtyText,
@@ -205,20 +299,35 @@ fun SaleDialog(
                         OutlinedTextField(
                             value = priceText,
                             onValueChange = { priceText = it.filter(Char::isDigit) },
-                            label = { Text("سعر الوحدة") },
+                            label = { Text("السعر") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.weight(1f)
                         )
                     }
+                    OutlinedTextField(
+                        value = discountText,
+                        onValueChange = { discountText = it.filter(Char::isDigit) },
+                        label = { Text("الخصم (اختياري)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     if (payment == PAY_CREDIT) {
-                        PickerField("الزبون", customer, customers.map { it.name }) { customer = it }
+                        SuggestField(
+                            label = "الزبون",
+                            value = customerText,
+                            onValueChange = { customerText = it },
+                            suggestions = customerSuggestions,
+                            onPick = { customerText = it }
+                        )
                     }
                 }
+
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
-                    label = { Text("ملاحظة") },
+                    label = { Text("ملاحظة (اختياري)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -230,11 +339,11 @@ fun SaleDialog(
                 enabled = valid,
                 onClick = {
                     if (isCollect) {
-                        onSave(PAY_COLLECT, 1, amount, amount, PAY_COLLECT, customer, note.trim())
+                        onSave(date, PAY_COLLECT, 1, amount, 0, amount, PAY_COLLECT, customerName, note.trim())
                     } else {
                         onSave(
-                            productName, qty, price, total, payment,
-                            if (payment == PAY_CREDIT) customer else "",
+                            date, productName, qty, price, discount, lineTotal, payment,
+                            if (payment == PAY_CREDIT) customerName else "",
                             note.trim()
                         )
                     }
@@ -268,7 +377,7 @@ fun PurchasesScreen(repo: Repo, profile: Profile) {
             items(purchases, key = { it.id }) { pu ->
                 EntryCard(
                     title = "${pu.item} × ${pu.qty}",
-                    subtitle = "${pu.category} - ${timeOf(pu.date)}" +
+                    subtitle = dateOf(pu.date) + " - ${pu.category}" +
                         (if (pu.note.isNotBlank()) " - ${pu.note}" else ""),
                     amount = money(pu.amount),
                     canDelete = profile.isOwner || pu.employeeId == repo.uid,
@@ -281,8 +390,8 @@ fun PurchasesScreen(repo: Repo, profile: Profile) {
     if (showForm) {
         PurchaseDialog(
             onDismiss = { showForm = false },
-            onSave = { item, qty, amount, category, note ->
-                scope.launch { repo.addPurchase(item, qty, amount, category, note) }
+            onSave = { date, item, qty, amount, category, note ->
+                scope.launch { repo.addPurchase(date, item, qty, amount, category, note) }
                 showForm = false
             }
         )
@@ -292,8 +401,9 @@ fun PurchasesScreen(repo: Repo, profile: Profile) {
 @Composable
 fun PurchaseDialog(
     onDismiss: () -> Unit,
-    onSave: (item: String, qty: Long, amount: Long, category: String, note: String) -> Unit
+    onSave: (date: Long, item: String, qty: Long, amount: Long, category: String, note: String) -> Unit
 ) {
+    var date by remember { mutableStateOf(System.currentTimeMillis()) }
     var item by remember { mutableStateOf("") }
     var qtyText by remember { mutableStateOf("1") }
     var amountText by remember { mutableStateOf("") }
@@ -309,8 +419,9 @@ fun PurchaseDialog(
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                DateButton("التاريخ", date, Modifier.fillMaxWidth()) { date = it }
                 OutlinedTextField(
                     value = item,
                     onValueChange = { item = it },
@@ -349,7 +460,7 @@ fun PurchaseDialog(
         confirmButton = {
             TextButton(
                 enabled = item.isNotBlank() && amount > 0,
-                onClick = { onSave(item.trim(), qty.coerceAtLeast(1), amount, category, note.trim()) }
+                onClick = { onSave(date, item.trim(), qty.coerceAtLeast(1), amount, category, note.trim()) }
             ) { Text("حفظ") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
@@ -379,7 +490,7 @@ fun ExpensesScreen(repo: Repo, profile: Profile) {
             items(expenses, key = { it.id }) { ex ->
                 EntryCard(
                     title = ex.category,
-                    subtitle = timeOf(ex.date) + (if (ex.note.isNotBlank()) " - ${ex.note}" else ""),
+                    subtitle = dateOf(ex.date) + (if (ex.note.isNotBlank()) " - ${ex.note}" else ""),
                     amount = money(ex.amount),
                     canDelete = profile.isOwner || ex.employeeId == repo.uid,
                     onDelete = { scope.launch { repo.delete("expenses", ex.id) } }
@@ -391,8 +502,8 @@ fun ExpensesScreen(repo: Repo, profile: Profile) {
     if (showForm) {
         ExpenseDialog(
             onDismiss = { showForm = false },
-            onSave = { category, amount, note ->
-                scope.launch { repo.addExpense(category, amount, note) }
+            onSave = { date, category, amount, note ->
+                scope.launch { repo.addExpense(date, category, amount, note) }
                 showForm = false
             }
         )
@@ -402,8 +513,9 @@ fun ExpensesScreen(repo: Repo, profile: Profile) {
 @Composable
 fun ExpenseDialog(
     onDismiss: () -> Unit,
-    onSave: (category: String, amount: Long, note: String) -> Unit
+    onSave: (date: Long, category: String, amount: Long, note: String) -> Unit
 ) {
+    var date by remember { mutableStateOf(System.currentTimeMillis()) }
     var category by remember { mutableStateOf(EXPENSE_CATEGORIES.first()) }
     var amountText by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
@@ -415,8 +527,9 @@ fun ExpenseDialog(
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                DateButton("التاريخ", date, Modifier.fillMaxWidth()) { date = it }
                 PickerField("البند", category, EXPENSE_CATEGORIES) { category = it }
                 OutlinedTextField(
                     value = amountText,
@@ -438,7 +551,7 @@ fun ExpenseDialog(
         confirmButton = {
             TextButton(
                 enabled = amount > 0,
-                onClick = { onSave(category, amount, note.trim()) }
+                onClick = { onSave(date, category, amount, note.trim()) }
             ) { Text("حفظ") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
@@ -502,15 +615,33 @@ fun ReportsScreen(repo: Repo) {
     val purchases by remember { repo.purchases(true) }.collectAsState(initial = emptyList())
     val expenses by remember { repo.expenses(true) }.collectAsState(initial = emptyList())
 
-    val months = remember { lastMonths(12) }
-    var month by remember { mutableStateOf<String?>(monthKey(System.currentTimeMillis())) }
+    var fromMs by remember { mutableStateOf(startOfMonth()) }
+    var toMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    var statementCustomer by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var newProduct by remember { mutableStateOf("") }
     var newPrice by remember { mutableStateOf("") }
 
+    // Builds the tables on a background thread, then shares the file.
+    fun export(baseName: String, pdf: Boolean, build: () -> List<Section>) {
+        busy = true
+        scope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    exportSections(context, baseName, build(), pdf)
+                }
+                shareFile(context, file, if (pdf) PDF_MIME else XLSX_MIME)
+            } catch (e: Exception) {
+                Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         if (products.isEmpty() && customers.isEmpty()) {
             Button(
@@ -519,44 +650,57 @@ fun ReportsScreen(repo: Repo) {
             ) { Text("تحميل قائمة الأسعار والزبائن من الإكسل") }
         }
 
-        Text("تصدير تقرير إكسل", fontWeight = FontWeight.Bold)
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            FilterChip(
-                selected = month == null,
-                onClick = { month = null },
-                label = { Text("كل الفترات") }
-            )
-            months.forEach { m ->
-                FilterChip(
-                    selected = month == m,
-                    onClick = { month = m },
-                    label = { Text(m) }
-                )
-            }
+        Text("تقرير بفترة محددة", fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DateButton("من", fromMs, Modifier.weight(1f)) { fromMs = it }
+            DateButton("إلى", toMs, Modifier.weight(1f)) { toMs = it }
         }
-        Button(
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth(),
-            onClick = {
-                busy = true
-                scope.launch {
-                    try {
-                        val file = withContext(Dispatchers.IO) {
-                            buildMonthlyExport(context, month, sales, purchases, expenses, customers)
-                        }
-                        shareFile(context, file)
-                    } catch (e: Exception) {
-                        Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
-                    } finally {
-                        busy = false
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                enabled = !busy,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    val label = "${dayKey(fromMs)}_${dayKey(toMs)}"
+                    export("report_$label", false) {
+                        buildSections(fromMs, endOfDay(toMs), sales, purchases, expenses, customers)
                     }
                 }
-            }
-        ) {
-            Text(if (busy) "جاري التحضير..." else "تصدير وإرسال")
+            ) { Text("إكسل") }
+            Button(
+                enabled = !busy,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    val label = "${dayKey(fromMs)}_${dayKey(toMs)}"
+                    export("report_$label", true) {
+                        buildSections(fromMs, endOfDay(toMs), sales, purchases, expenses, customers)
+                    }
+                }
+            ) { Text("PDF") }
+        }
+
+        Text("كشف حساب زبون", fontWeight = FontWeight.Bold)
+        PickerField("الزبون", statementCustomer, customers.map { it.name }) { statementCustomer = it }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                enabled = !busy && statementCustomer.isNotBlank(),
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    val name = statementCustomer
+                    export("statement_${name}_${dayKey(toMs)}", false) {
+                        listOf(statementSection(name, sales, fromMs, endOfDay(toMs)))
+                    }
+                }
+            ) { Text("كشف إكسل") }
+            Button(
+                enabled = !busy && statementCustomer.isNotBlank(),
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    val name = statementCustomer
+                    export("statement_${name}_${dayKey(toMs)}", true) {
+                        listOf(statementSection(name, sales, fromMs, endOfDay(toMs)))
+                    }
+                }
+            ) { Text("كشف PDF") }
         }
 
         Button(
@@ -567,8 +711,8 @@ fun ReportsScreen(repo: Repo) {
                 scope.launch {
                     try {
                         val saved = withContext(Dispatchers.IO) {
-                            val file = buildMonthlyExport(context, null, sales, purchases, expenses, customers)
-                            saveToDownloads(context, file)
+                            val sections = buildSections(0L, Long.MAX_VALUE, sales, purchases, expenses, customers)
+                            saveToDownloads(context, exportSections(context, "backup_all", sections, false))
                         }
                         Toast.makeText(context, "تم الحفظ في Downloads: $saved", Toast.LENGTH_LONG).show()
                     } catch (e: Exception) {
@@ -578,9 +722,7 @@ fun ReportsScreen(repo: Repo) {
                     }
                 }
             }
-        ) {
-            Text("نسخة احتياطية كاملة (Downloads)")
-        }
+        ) { Text("نسخة احتياطية كاملة (Downloads)") }
 
         Text("إضافة صنف للقائمة", fontWeight = FontWeight.Bold)
         OutlinedTextField(

@@ -3,6 +3,8 @@ package com.example.cafe
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -10,11 +12,16 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+
+const val XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+const val PDF_MIME = "application/pdf"
+
+/** One table in a report: a sheet in Excel, a titled table in PDF. */
+data class Section(val name: String, val headers: List<String>, val rows: List<List<Any?>>)
 
 /** Minimal .xlsx writer (no external library, works on Android). Arabic is written as UTF-8. */
 object XlsxWriter {
@@ -113,37 +120,24 @@ object XlsxWriter {
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 }
 
-/** Last [count] months as "yyyy-MM", newest first. */
-fun lastMonths(count: Int): List<String> =
-    (0 until count).map { i ->
-        monthKey(Calendar.getInstance().apply { add(Calendar.MONTH, -i) }.timeInMillis)
-    }
-
-/**
- * Builds one workbook with the same sheets as the owner's Excel file.
- * [month] is "yyyy-MM" to limit the period, or null for all records.
- * Customer balances always use all-time sales.
- */
-fun buildMonthlyExport(
-    context: Context,
-    month: String?,
+/** Builds the report tables for a date range. [sales] must be all sales, so customer balances are all-time. */
+fun buildSections(
+    fromMs: Long,
+    toMs: Long,
     sales: List<Sale>,
     purchases: List<Purchase>,
     expenses: List<Expense>,
     customers: List<Customer>
-): File {
-    fun inPeriod(ms: Long) = month == null || monthKey(ms) == month
+): List<Section> {
+    fun inRange(ms: Long) = ms in fromMs..toMs
 
-    val s = sales.filter { inPeriod(it.date) }.sortedBy { it.date }
-    val p = purchases.filter { inPeriod(it.date) }.sortedBy { it.date }
-    val e = expenses.filter { inPeriod(it.date) }.sortedBy { it.date }
+    val s = sales.filter { inRange(it.date) }.sortedBy { it.date }
+    val p = purchases.filter { inRange(it.date) }.sortedBy { it.date }
+    val e = expenses.filter { inRange(it.date) }.sortedBy { it.date }
     val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
 
-    // Daily summary (same logic as the workbook's الملخص sheet)
     val days = (s.map { dayKey(it.date) } + p.map { dayKey(it.date) } + e.map { dayKey(it.date) }).toSortedSet()
-    val summary = mutableListOf<List<Any?>>(
-        listOf("التاريخ", "مبيعات كاش", "على الحساب", "تحصيل دين", "إجمالي المبيعات", "المشتريات", "المصروفات", "صافي الكاش")
-    )
+    val summaryRows = mutableListOf<List<Any?>>()
     var tCash = 0L
     var tCredit = 0L
     var tCollect = 0L
@@ -155,76 +149,161 @@ fun buildMonthlyExport(
         val collect = s.filter { dayKey(it.date) == d && it.payment == PAY_COLLECT }.sumOf { it.total }
         val buy = p.filter { dayKey(it.date) == d }.sumOf { it.amount }
         val exp = e.filter { dayKey(it.date) == d }.sumOf { it.amount }
-        summary.add(listOf(d, cash, credit, collect, cash + credit, buy, exp, cash + collect - buy - exp))
+        summaryRows.add(listOf(d, cash, credit, collect, cash + credit, buy, exp, cash + collect - buy - exp))
         tCash += cash
         tCredit += credit
         tCollect += collect
         tBuy += buy
         tExp += exp
     }
-    summary.add(
-        listOf("الإجمالي", tCash, tCredit, tCollect, tCash + tCredit, tBuy, tExp, tCash + tCollect - tBuy - tExp)
-    )
+    summaryRows.add(listOf("الإجمالي", tCash, tCredit, tCollect, tCash + tCredit, tBuy, tExp, tCash + tCollect - tBuy - tExp))
 
-    val salesRows = mutableListOf<List<Any?>>(
-        listOf("التاريخ", "المادة", "الكمية", "سعر الوحدة", "المجموع", "الدفع", "الزبون", "ملاحظة", "الموظف")
-    )
-    s.forEach {
-        salesRows.add(
-            listOf(stamp.format(Date(it.date)), it.product, it.qty, it.unitPrice, it.total,
-                it.payment, it.customer, it.note, it.employeeEmail)
-        )
-    }
-
-    val purchaseRows = mutableListOf<List<Any?>>(
-        listOf("التاريخ", "المادة", "الكمية", "المبلغ", "التصنيف", "ملاحظة", "الموظف")
-    )
-    p.forEach {
-        purchaseRows.add(
-            listOf(stamp.format(Date(it.date)), it.item, it.qty, it.amount, it.category, it.note, it.employeeEmail)
-        )
-    }
-
-    val expenseRows = mutableListOf<List<Any?>>(
-        listOf("التاريخ", "البند", "المبلغ", "ملاحظة", "الموظف")
-    )
-    e.forEach {
-        expenseRows.add(listOf(stamp.format(Date(it.date)), it.category, it.amount, it.note, it.employeeEmail))
-    }
-
-    val customerRows = mutableListOf<List<Any?>>(
-        listOf("الزبون", "على الحساب", "تحصيل", "الرصيد المستحق حتى الآن")
-    )
-    customers.sortedBy { it.name }.forEach { c ->
+    val customerRows = customers.sortedBy { it.name }.map { c ->
         val credit = sales.filter { it.customer == c.name && it.payment == PAY_CREDIT }.sumOf { it.total }
         val paid = sales.filter { it.customer == c.name && it.payment == PAY_COLLECT }.sumOf { it.total }
-        customerRows.add(listOf(c.name, credit, paid, credit - paid))
+        listOf<Any?>(c.name, credit, paid, credit - paid)
     }
 
-    val dir = File(context.cacheDir, "exports").apply { mkdirs() }
-    val file = File(dir, "cafe_report_${month ?: "all"}.xlsx")
-    XlsxWriter.write(
-        file,
-        listOf(
-            "الملخص" to summary,
-            "المبيعات" to salesRows,
-            "المشتريات" to purchaseRows,
-            "المصروفات" to expenseRows,
-            "أرصدة الزبائن" to customerRows
+    return listOf(
+        Section(
+            "الملخص اليومي",
+            listOf("التاريخ", "مبيعات كاش", "على الحساب", "تحصيل دين", "إجمالي المبيعات", "المشتريات", "المصروفات", "صافي الكاش"),
+            summaryRows
+        ),
+        Section(
+            "المبيعات",
+            listOf("التاريخ", "المادة", "الكمية", "سعر الوحدة", "الخصم", "المجموع", "الدفع", "الزبون", "ملاحظة", "الموظف"),
+            s.map {
+                listOf<Any?>(
+                    stamp.format(Date(it.date)), it.product, it.qty, it.unitPrice, it.discount,
+                    it.total, it.payment, it.customer, it.note, it.employeeEmail
+                )
+            }
+        ),
+        Section(
+            "المشتريات",
+            listOf("التاريخ", "المادة", "الكمية", "المبلغ", "التصنيف", "ملاحظة", "الموظف"),
+            p.map {
+                listOf<Any?>(stamp.format(Date(it.date)), it.item, it.qty, it.amount, it.category, it.note, it.employeeEmail)
+            }
+        ),
+        Section(
+            "المصروفات",
+            listOf("التاريخ", "البند", "المبلغ", "ملاحظة", "الموظف"),
+            e.map {
+                listOf<Any?>(stamp.format(Date(it.date)), it.category, it.amount, it.note, it.employeeEmail)
+            }
+        ),
+        Section(
+            "أرصدة الزبائن حتى الآن",
+            listOf("الزبون", "على الحساب", "تحصيل", "الرصيد المستحق"),
+            customerRows
         )
     )
+}
+
+/** Account statement for one customer. Opening balance carries everything before [fromMs]. */
+fun statementSection(customer: String, sales: List<Sale>, fromMs: Long, toMs: Long): Section {
+    val mine = sales
+        .filter { it.customer == customer && (it.payment == PAY_CREDIT || it.payment == PAY_COLLECT) }
+        .sortedBy { it.date }
+    var running = mine.filter { it.date < fromMs }
+        .sumOf { if (it.payment == PAY_CREDIT) it.total else -it.total }
+
+    val rows = mutableListOf<List<Any?>>()
+    rows.add(listOf<Any?>("", "رصيد سابق", "", "", running))
+    for (sale in mine.filter { it.date in fromMs..toMs }) {
+        if (sale.payment == PAY_CREDIT) {
+            running += sale.total
+            rows.add(listOf<Any?>(dateOf(sale.date), "${sale.product} × ${sale.qty}", sale.total, "", running))
+        } else {
+            running -= sale.total
+            rows.add(listOf<Any?>(dateOf(sale.date), "تحصيل", "", sale.total, running))
+        }
+    }
+    return Section(
+        "كشف حساب $customer",
+        listOf("التاريخ", "البيان", "على الحساب", "تحصيل", "الرصيد"),
+        rows
+    )
+}
+
+fun exportSections(context: Context, baseName: String, sections: List<Section>, pdf: Boolean): File {
+    val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+    if (pdf) {
+        val file = File(dir, "$baseName.pdf")
+        writePdf(file, sections)
+        return file
+    }
+    val file = File(dir, "$baseName.xlsx")
+    XlsxWriter.write(file, sections.map { s -> s.name to (listOf<List<Any?>>(s.headers) + s.rows) })
     return file
+}
+
+/** Simple paginated PDF with one titled table per section. Uses Android's built-in PdfDocument. */
+fun writePdf(file: File, sections: List<Section>) {
+    val pageW = 595
+    val pageH = 842
+    val margin = 36f
+    val lineH = 15f
+
+    val doc = PdfDocument()
+    val titleP = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 15f; isFakeBoldText = true }
+    val headP = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 9f; isFakeBoldText = true }
+    val bodyP = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 9f }
+
+    var pageNo = 0
+    var page: PdfDocument.Page? = null
+    var y = 0f
+
+    fun newPage() {
+        page?.let { doc.finishPage(it) }
+        pageNo++
+        page = doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, pageNo).create())
+        y = margin + 10f
+    }
+
+    fun ensure(height: Float) {
+        if (page == null || y + height > pageH - margin) newPage()
+    }
+
+    newPage()
+    for (section in sections) {
+        ensure(40f)
+        page!!.canvas.drawText(section.name, margin, y, titleP)
+        y += 24f
+
+        val cols = section.headers.size.coerceAtLeast(1)
+        val colW = (pageW - 2 * margin) / cols
+
+        fun drawRow(cells: List<String>, paint: Paint) {
+            cells.forEachIndexed { i, cell ->
+                page!!.canvas.drawText(cell.take(24), margin + i * colW, y, paint)
+            }
+            y += lineH
+        }
+
+        ensure(lineH)
+        drawRow(section.headers, headP)
+        for (row in section.rows) {
+            ensure(lineH)
+            drawRow(row.map { it?.toString() ?: "" }, bodyP)
+        }
+        y += 16f
+    }
+    page?.let { doc.finishPage(it) }
+    file.outputStream().use { doc.writeTo(it) }
+    doc.close()
 }
 
 /** Copies the file into the public Downloads folder so it survives uninstalling the app. Returns the saved name. */
 fun saveToDownloads(context: Context, source: File): String {
     val name = "moaz_backup_${System.currentTimeMillis()}.xlsx"
-    val mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, name)
-            put(MediaStore.Downloads.MIME_TYPE, mime)
+            put(MediaStore.Downloads.MIME_TYPE, XLSX_MIME)
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -243,10 +322,10 @@ fun saveToDownloads(context: Context, source: File): String {
     }
 }
 
-fun shareFile(context: Context, file: File) {
+fun shareFile(context: Context, file: File, mime: String) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        type = mime
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }

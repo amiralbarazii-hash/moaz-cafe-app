@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -25,11 +26,25 @@ import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
+// White background with a gold accent.
+private val cafeColors = lightColorScheme(
+    primary = Color(0xFF9C7A1E),
+    onPrimary = Color.White,
+    secondary = Color(0xFFB8963A),
+    onSecondary = Color.White,
+    background = Color.White,
+    onBackground = Color(0xFF1F1F1F),
+    surface = Color.White,
+    onSurface = Color(0xFF1F1F1F),
+    surfaceVariant = Color(0xFFF5F1E6),
+    error = Color(0xFFB3261E)
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme()) {
+            MaterialTheme(colorScheme = cafeColors) {
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                     Surface(Modifier.fillMaxSize()) {
                         AppRoot()
