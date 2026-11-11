@@ -639,6 +639,8 @@ fun ReportsScreen(repo: Repo) {
     val sales by remember { repo.sales(true) }.collectAsState(initial = emptyList())
     val purchases by remember { repo.purchases(true) }.collectAsState(initial = emptyList())
     val expenses by remember { repo.expenses(true) }.collectAsState(initial = emptyList())
+    val items by remember { repo.items() }.collectAsState(initial = emptyList())
+    val consumptions by remember { repo.consumptions() }.collectAsState(initial = emptyList())
 
     var fromMs by remember { mutableStateOf(startOfMonth()) }
     var toMs by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -686,7 +688,7 @@ fun ReportsScreen(repo: Repo) {
                 modifier = Modifier.weight(1f),
                 onClick = {
                     exportAndShare("report_${dayKey(fromMs)}_${dayKey(toMs)}", false) {
-                        buildSections(fromMs, endOfDay(toMs), sales, purchases, expenses, customers)
+                        buildSections(fromMs, endOfDay(toMs), sales, purchases, expenses, customers, items, consumptions)
                     }
                 }
             ) { Text("إكسل") }
@@ -695,7 +697,7 @@ fun ReportsScreen(repo: Repo) {
                 modifier = Modifier.weight(1f),
                 onClick = {
                     exportAndShare("report_${dayKey(fromMs)}_${dayKey(toMs)}", true) {
-                        buildSections(fromMs, endOfDay(toMs), sales, purchases, expenses, customers)
+                        buildSections(fromMs, endOfDay(toMs), sales, purchases, expenses, customers, items, consumptions)
                     }
                 }
             ) { Text("PDF") }
@@ -737,7 +739,7 @@ fun ReportsScreen(repo: Repo) {
                         val saved = withContext(Dispatchers.IO) {
                             val file = exportSections(
                                 context, "backup_all",
-                                buildSections(0L, Long.MAX_VALUE, sales, purchases, expenses, customers),
+                                buildSections(0L, Long.MAX_VALUE, sales, purchases, expenses, customers, items, consumptions),
                                 false
                             )
                             saveToDownloads(context, file)
@@ -778,5 +780,129 @@ fun ReportsScreen(repo: Repo) {
                 scope.launch { repo.addProduct(name, price) }
             }
         ) { Text("إضافة") }
+    }
+}
+
+// ---------- Inventory (owner and manager) ----------
+
+@Composable
+fun InventoryScreen(repo: Repo) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val stock by remember { repo.items() }.collectAsState(initial = emptyList())
+    val sales by remember { repo.sales(true) }.collectAsState(initial = emptyList())
+    val purchases by remember { repo.purchases(true) }.collectAsState(initial = emptyList())
+    val consumptions by remember { repo.consumptions() }.collectAsState(initial = emptyList())
+
+    val counted = remember { mutableStateMapOf<String, String>() }
+    var newName by remember { mutableStateOf("") }
+    var newUnit by remember { mutableStateOf("") }
+    var newOpening by remember { mutableStateOf("") }
+    var consItem by remember { mutableStateOf("") }
+    var consQty by remember { mutableStateOf("") }
+    var consNote by remember { mutableStateOf("") }
+
+    fun systemQty(item: Item): Long =
+        item.opening +
+            purchases.filter { it.item == item.name }.sumOf { it.qty } -
+            sales.filter { it.product == item.name }.sumOf { it.qty } -
+            consumptions.filter { it.itemName == item.name }.sumOf { it.qty }
+
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp)) {
+        item {
+            Text("إضافة صنف للمخزون", fontWeight = FontWeight.Bold)
+            OutlinedTextField(
+                value = newName, onValueChange = { newName = it },
+                label = { Text("اسم الصنف") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = newUnit, onValueChange = { newUnit = it },
+                    label = { Text("الوحدة") }, singleLine = true, modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = newOpening, onValueChange = { newOpening = it.filter(Char::isDigit) },
+                    label = { Text("الرصيد الافتتاحي") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Button(
+                enabled = newName.isNotBlank(),
+                onClick = {
+                    val name = newName.trim()
+                    val unit = newUnit.trim()
+                    val opening = newOpening.toLongOrNull() ?: 0L
+                    newName = ""; newUnit = ""; newOpening = ""
+                    scope.launch { repo.addItem(name, unit, opening) }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("إضافة") }
+
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            Text("تسجيل استهلاك يدوي", fontWeight = FontWeight.Bold)
+            PickerField("الصنف", consItem, stock.map { it.name }) { consItem = it }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = consQty, onValueChange = { consQty = it.filter(Char::isDigit) },
+                    label = { Text("الكمية") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = consNote, onValueChange = { consNote = it },
+                    label = { Text("ملاحظة") }, singleLine = true, modifier = Modifier.weight(1f)
+                )
+            }
+            Button(
+                enabled = consItem.isNotBlank() && (consQty.toLongOrNull() ?: 0L) > 0,
+                onClick = {
+                    val qty = consQty.toLong()
+                    val name = consItem
+                    val note = consNote.trim()
+                    consQty = ""; consNote = ""
+                    scope.launch {
+                        repo.addConsumption(System.currentTimeMillis(), name, qty, note)
+                        Toast.makeText(context, "تم تسجيل الاستهلاك", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("تسجيل") }
+
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("الجرد الأسبوعي", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Button(
+                    enabled = counted.isNotEmpty(),
+                    onClick = {
+                        val values = counted.mapNotNull { (k, v) -> v.toLongOrNull()?.let { k to it } }.toMap()
+                        counted.clear()
+                        scope.launch { repo.saveCounts(System.currentTimeMillis(), values) }
+                    }
+                ) { Text("حفظ الجرد") }
+            }
+            Text(
+                "اكتب الكمية المعدودة فعلياً لكل صنف، والفرق مع النظام يتسجل.",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        items(stock, key = { it.id }) { it ->
+            val sys = systemQty(it)
+            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("${it.name} ${if (it.unit.isNotBlank()) "(${it.unit})" else ""}", fontWeight = FontWeight.Bold)
+                    Text("بالنظام: $sys", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = counted[it.name] ?: "",
+                        onValueChange = { v -> counted[it.name] = v.filter(Char::isDigit) },
+                        label = { Text("المعدود فعلياً") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
     }
 }

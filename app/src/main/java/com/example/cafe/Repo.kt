@@ -271,6 +271,39 @@ class Repo {
         db.collection(col).document(id).delete().await()
     }
 
+    fun items(): Flow<List<Item>> = listen(db.collection("items")) { d ->
+        Item(d.id, d.getString("name") ?: "", d.getString("unit") ?: "", d.getLong("opening") ?: 0L)
+    }
+
+    fun consumptions(): Flow<List<Consumption>> = listen(db.collection("consumptions")) { d ->
+        Consumption(
+            d.id, d.getLong("date") ?: 0L, d.getString("itemName") ?: "",
+            d.getLong("qty") ?: 0L, d.getString("note") ?: ""
+        )
+    }
+
+    suspend fun addItem(name: String, unit: String, opening: Long) {
+        db.collection("items").add(mapOf("name" to name, "unit" to unit, "opening" to opening)).await()
+    }
+
+    suspend fun addConsumption(date: Long, itemName: String, qty: Long, note: String) {
+        db.collection("consumptions").add(
+            mapOf("date" to date, "itemName" to itemName, "qty" to qty, "note" to note, "employeeId" to uid)
+        ).await()
+    }
+
+    /** Weekly count: one record per item counted, stored with the count date. */
+    suspend fun saveCounts(date: Long, counts: Map<String, Long>) {
+        val batch = db.batch()
+        counts.forEach { (name, counted) ->
+            batch.set(
+                db.collection("counts").document(),
+                mapOf("date" to date, "itemName" to name, "counted" to counted, "employeeId" to uid)
+            )
+        }
+        batch.commit().await()
+    }
+
     suspend fun seedDefaults() {
         val batch = db.batch()
         DEFAULT_PRODUCTS.forEach { (name, price) ->
@@ -282,3 +315,6 @@ class Repo {
         batch.commit().await()
     }
 }
+
+data class Item(val id: String, val name: String, val unit: String, val opening: Long)
+data class Consumption(val id: String, val date: Long, val itemName: String, val qty: Long, val note: String)

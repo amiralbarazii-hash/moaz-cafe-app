@@ -127,7 +127,9 @@ fun buildSections(
     sales: List<Sale>,
     purchases: List<Purchase>,
     expenses: List<Expense>,
-    customers: List<Customer>
+    customers: List<Customer>,
+    items: List<Item> = emptyList(),
+    consumptions: List<Consumption> = emptyList()
 ): List<Section> {
     fun inRange(ms: Long) = ms in fromMs..toMs
 
@@ -164,6 +166,14 @@ fun buildSections(
         listOf<Any?>(c.name, credit, paid, credit - paid)
     }
 
+    // Stock is all-time: opening balance + purchases − sales − manual consumption.
+    val stockRows = items.sortedBy { it.name }.map { it2 ->
+        val bought = purchases.filter { p -> p.item == it2.name }.sumOf { p -> p.qty }
+        val sold = sales.filter { sa -> sa.product == it2.name }.sumOf { sa -> sa.qty }
+        val used = consumptions.filter { c -> c.itemName == it2.name }.sumOf { c -> c.qty }
+        listOf<Any?>(it2.name, it2.unit, it2.opening, bought, sold, used, it2.opening + bought - sold - used)
+    }
+
     return listOf(
         Section(
             "الملخص اليومي",
@@ -198,6 +208,11 @@ fun buildSections(
             "أرصدة الزبائن حتى الآن",
             listOf("الزبون", "على الحساب", "تحصيل", "الرصيد المستحق"),
             customerRows
+        ),
+        Section(
+            "المخزون",
+            listOf("الصنف", "الوحدة", "الرصيد الافتتاحي", "مشتريات", "مبيعات", "استهلاك", "الرصيد الحالي"),
+            stockRows
         )
     )
 }

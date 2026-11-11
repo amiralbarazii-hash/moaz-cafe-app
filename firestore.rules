@@ -58,5 +58,17 @@ service cloud.firestore {
       allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
       allow read, update, delete: if isManager();
     }
+    // Inventory: managers only. Stock is computed from these, purchases and sales.
+    match /items/{id} {
+      allow read, write: if isManager();
+    }
+
+    match /consumptions/{id} {
+      allow read, write: if isManager();
+    }
+
+    match /counts/{id} {
+      allow read, write: if isManager();
+    }
   }
 }
