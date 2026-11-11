@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "789305140037",
+    "project_id": "moaz-alkhatib-roastery",
+    "storage_bucket": "moaz-alkhatib-roastery.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:789305140037:android:bd027d34a5632365c2942c",
+        "android_client_info": {
+          "package_name": "com.example.cafe"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBmUSERAz_t-FqJg1mcAjskl2VPaRom3YA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
