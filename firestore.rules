@@ -1,0 +1,61 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    // Profile: each user can read their own; owner reads all.
+    // A user can create only their own profile, and only with role "employee".
+    // Only the owner can change roles.
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isOwner());
+      allow create: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.role == 'employee';
+      allow update, delete: if isOwner();
+    }
+
+    // Price list: everyone reads, only owner edits.
+    match /products/{id} {
+      allow read: if signedIn();
+      allow write: if isOwner();
+    }
+
+    // Customers (credit accounts): any signed-in user can add or read.
+    match /customers/{id} {
+      allow read, write: if signedIn();
+    }
+
+    // Records: an employee sees and edits only their own; owner sees all.
+    match /sales/{id} {
+      allow read: if signedIn() && (resource.data.employeeId == request.auth.uid || isOwner());
+      allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
+      allow update: if isOwner() || (resource.data.employeeId == request.auth.uid
+                      && request.resource.data.employeeId == request.auth.uid);
+      allow delete: if isOwner() || resource.data.employeeId == request.auth.uid;
+    }
+
+    match /purchases/{id} {
+      allow read: if signedIn() && (resource.data.employeeId == request.auth.uid || isOwner());
+      allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
+      allow update: if isOwner() || (resource.data.employeeId == request.auth.uid
+                      && request.resource.data.employeeId == request.auth.uid);
+      allow delete: if isOwner() || resource.data.employeeId == request.auth.uid;
+    }
+
+    match /expenses/{id} {
+      allow read: if signedIn() && (resource.data.employeeId == request.auth.uid || isOwner());
+      allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
+      allow update: if isOwner() || (resource.data.employeeId == request.auth.uid
+                      && request.resource.data.employeeId == request.auth.uid);
+      allow delete: if isOwner() || resource.data.employeeId == request.auth.uid;
+    }
+  }
+}
