@@ -58,7 +58,14 @@ fun DateButton(label: String, millis: Long, modifier: Modifier = Modifier, onPic
 }
 
 @Composable
-fun EntryCard(title: String, subtitle: String, amount: String, canDelete: Boolean, onDelete: () -> Unit) {
+fun EntryCard(
+    title: String,
+    subtitle: String,
+    amount: String,
+    canDelete: Boolean,
+    onDelete: () -> Unit,
+    onEdit: (() -> Unit)? = null
+) {
     Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -66,6 +73,9 @@ fun EntryCard(title: String, subtitle: String, amount: String, canDelete: Boolea
                 Text(subtitle, style = MaterialTheme.typography.bodySmall)
             }
             Text(amount, fontWeight = FontWeight.Bold)
+            if (onEdit != null) {
+                TextButton(onClick = onEdit) { Text("تعديل") }
+            }
             if (canDelete) {
                 TextButton(onClick = onDelete) { Text("حذف") }
             }
@@ -133,6 +143,7 @@ fun SalesScreen(repo: Repo, profile: Profile) {
     val customers by remember { repo.customers() }.collectAsState(initial = emptyList())
     val sales by remember(profile.isOwner) { repo.sales(profile.isOwner) }.collectAsState(initial = emptyList())
     val pending by remember { repo.pendingCountFlow() }.collectAsState(initial = 0)
+    var editing by remember { mutableStateOf<Sale?>(null) }
     val scope = rememberCoroutineScope()
     var showForm by remember { mutableStateOf(false) }
 
@@ -168,26 +179,34 @@ fun SalesScreen(repo: Repo, profile: Profile) {
                         (if (s.discount > 0) " - خصم ${money(s.discount)}" else "") +
                         (if (s.note.isNotBlank()) " - ${s.note}" else ""),
                     amount = money(s.total),
-                    canDelete = profile.isOwner || s.employeeId == repo.uid,
-                    onDelete = { scope.launch { repo.delete("sales", s.id) } }
+                    canDelete = profile.isOwner,
+                    onDelete = { scope.launch { repo.delete("sales", s.id) } },
+                    onEdit = if (profile.isOwner) ({ editing = s }) else null
                 )
             }
         }
     }
 
-    if (showForm) {
+    if (showForm || editing != null) {
+        val current = editing
         SaleDialog(
             products = products,
             customers = customers,
-            onDismiss = { showForm = false },
+            initial = current,
+            onDismiss = { showForm = false; editing = null },
             onSave = { date, product, qty, unitPrice, discount, total, payment, customer, note ->
                 scope.launch {
-                    repo.addSale(date, product, qty, unitPrice, discount, total, payment, customer, note)
+                    if (current != null) {
+                        repo.updateSale(current.id, date, product, qty, unitPrice, discount, total, payment, customer, note)
+                    } else {
+                        repo.addSale(date, product, qty, unitPrice, discount, total, payment, customer, note)
+                    }
                     if (customer.isNotBlank() && customers.none { it.name == customer }) {
                         repo.addCustomer(customer)
                     }
                 }
                 showForm = false
+                editing = null
             }
         )
     }
@@ -197,19 +216,22 @@ fun SalesScreen(repo: Repo, profile: Profile) {
 fun SaleDialog(
     products: List<Product>,
     customers: List<Customer>,
+    initial: Sale? = null,
     onDismiss: () -> Unit,
     onSave: (date: Long, product: String, qty: Long, unitPrice: Long, discount: Long, total: Long, payment: String, customer: String, note: String) -> Unit
 ) {
-    var date by remember { mutableStateOf(System.currentTimeMillis()) }
-    var payment by remember { mutableStateOf(PAY_CASH) }
-    var productQuery by remember { mutableStateOf("") }
-    var productName by remember { mutableStateOf("") }
-    var priceText by remember { mutableStateOf("") }
-    var qtyText by remember { mutableStateOf("1") }
-    var discountText by remember { mutableStateOf("") }
-    var customerText by remember { mutableStateOf("") }
-    var amountText by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
+    var date by remember { mutableStateOf(initial?.date ?: System.currentTimeMillis()) }
+    var payment by remember { mutableStateOf(initial?.payment ?: PAY_CASH) }
+    var productQuery by remember { mutableStateOf(initial?.product ?: "") }
+    var productName by remember { mutableStateOf(initial?.product ?: "") }
+    var priceText by remember { mutableStateOf(initial?.unitPrice?.toString() ?: "") }
+    var qtyText by remember { mutableStateOf(initial?.qty?.toString() ?: "1") }
+    var discountText by remember { mutableStateOf(initial?.discount?.takeIf { it > 0 }?.toString() ?: "") }
+    var customerText by remember { mutableStateOf(initial?.customer ?: "") }
+    var amountText by remember {
+        mutableStateOf(if (initial?.payment == PAY_COLLECT) initial.total.toString() else "")
+    }
+    var note by remember { mutableStateOf(initial?.note ?: "") }
 
     val isCollect = payment == PAY_COLLECT
     val qty = qtyText.toLongOrNull() ?: 0L
@@ -382,7 +404,7 @@ fun PurchasesScreen(repo: Repo, profile: Profile) {
                     subtitle = dateOf(pu.date) + " - ${pu.category}" +
                         (if (pu.note.isNotBlank()) " - ${pu.note}" else ""),
                     amount = money(pu.amount),
-                    canDelete = profile.isOwner || pu.employeeId == repo.uid,
+                    canDelete = profile.isOwner,
                     onDelete = { scope.launch { repo.delete("purchases", pu.id) } }
                 )
             }
@@ -494,7 +516,7 @@ fun ExpensesScreen(repo: Repo, profile: Profile) {
                     title = ex.category,
                     subtitle = dateOf(ex.date) + (if (ex.note.isNotBlank()) " - ${ex.note}" else ""),
                     amount = money(ex.amount),
-                    canDelete = profile.isOwner || ex.employeeId == repo.uid,
+                    canDelete = profile.isOwner,
                     onDelete = { scope.launch { repo.delete("expenses", ex.id) } }
                 )
             }

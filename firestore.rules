@@ -33,29 +33,23 @@ service cloud.firestore {
       allow read, write: if signedIn();
     }
 
-    // Records: an employee sees and edits only their own; owner sees all.
+    // Records: an employee sees and creates only their own; only the owner edits or deletes.
     match /sales/{id} {
       allow read: if signedIn() && (resource.data.employeeId == request.auth.uid || isOwner());
       allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
-      allow update: if isOwner() || (resource.data.employeeId == request.auth.uid
-                      && request.resource.data.employeeId == request.auth.uid);
-      allow delete: if isOwner() || resource.data.employeeId == request.auth.uid;
+      allow update, delete: if isOwner();
     }
 
     match /purchases/{id} {
       allow read: if signedIn() && (resource.data.employeeId == request.auth.uid || isOwner());
       allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
-      allow update: if isOwner() || (resource.data.employeeId == request.auth.uid
-                      && request.resource.data.employeeId == request.auth.uid);
-      allow delete: if isOwner() || resource.data.employeeId == request.auth.uid;
+      allow update, delete: if isOwner();
     }
 
     match /expenses/{id} {
       allow read: if signedIn() && (resource.data.employeeId == request.auth.uid || isOwner());
       allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
-      allow update: if isOwner() || (resource.data.employeeId == request.auth.uid
-                      && request.resource.data.employeeId == request.auth.uid);
-      allow delete: if isOwner() || resource.data.employeeId == request.auth.uid;
+      allow update, delete: if isOwner();
     }
   }
 }

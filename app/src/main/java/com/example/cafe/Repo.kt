@@ -215,6 +215,26 @@ class Repo {
         ).await()
     }
 
+    /** Owner only (enforced by Firestore rules). Keeps the original employee fields. */
+    suspend fun updateSale(
+        id: String, date: Long, product: String, qty: Long, unitPrice: Long, discount: Long,
+        total: Long, payment: String, customer: String, note: String
+    ) {
+        db.collection("sales").document(id).update(
+            mapOf(
+                "date" to date,
+                "product" to product,
+                "qty" to qty,
+                "unitPrice" to unitPrice,
+                "discount" to discount,
+                "total" to total,
+                "payment" to payment,
+                "customer" to customer,
+                "note" to note
+            )
+        ).await()
+    }
+
     suspend fun addPurchase(date: Long, item: String, qty: Long, amount: Long, category: String, note: String) {
         db.collection("purchases").add(
             baseFields(date) + mapOf(
