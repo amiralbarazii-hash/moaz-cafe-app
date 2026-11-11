@@ -38,11 +38,10 @@ fun pickDate(context: Context, current: Long, onPick: (Long) -> Unit) {
     AndroidDatePicker(
         context,
         { _, y, m, d ->
-            val picked = Calendar.getInstance().apply {
+            onPick(Calendar.getInstance().apply {
                 set(y, m, d, 12, 0, 0)
                 set(Calendar.MILLISECOND, 0)
-            }
-            onPick(picked.timeInMillis)
+            }.timeInMillis)
         },
         cal.get(Calendar.YEAR),
         cal.get(Calendar.MONTH),
@@ -69,31 +68,6 @@ fun EntryCard(title: String, subtitle: String, amount: String, canDelete: Boolea
             Text(amount, fontWeight = FontWeight.Bold)
             if (canDelete) {
                 TextButton(onClick = onDelete) { Text("حذف") }
-            }
-        }
-    }
-}
-
-/** Text field with a list of matching suggestions shown right under it. */
-@Composable
-fun SuggestField(
-    label: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    suggestions: List<String>,
-    onPick: (String) -> Unit
-) {
-    Column(Modifier.fillMaxWidth()) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            label = { Text(label) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        suggestions.forEach { s ->
-            TextButton(onClick = { onPick(s) }, modifier = Modifier.fillMaxWidth()) {
-                Text(s, modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -126,6 +100,31 @@ fun PickerField(label: String, value: String, options: List<String>, onPick: (St
     }
 }
 
+/** Text field with a list of matching suggestions shown right under it. */
+@Composable
+fun SuggestField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    suggestions: List<String>,
+    onPick: (String) -> Unit
+) {
+    Column(Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        suggestions.forEach { s ->
+            TextButton(onClick = { onPick(s) }, modifier = Modifier.fillMaxWidth()) {
+                Text(s)
+            }
+        }
+    }
+}
+
 // ---------- Sales ----------
 
 @Composable
@@ -146,7 +145,7 @@ fun SalesScreen(repo: Repo, profile: Profile) {
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         if (pending > 0) {
             Text(
-                "تنبيه: $pending عملية ما انرفعت للسحابة بعد (ما في إنترنت). لا تحذف التطبيق قبل ما ترفع.",
+                "تنبيه: $pending عملية ما انرفعت للسحابة بعد. لا تحذف التطبيق قبل ما ترفع.",
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall
             )
@@ -221,13 +220,7 @@ fun SaleDialog(
     val total = if (isCollect) amount else lineTotal
     val customerName = customerText.trim()
 
-    val valid = if (isCollect) {
-        customerName.isNotBlank() && amount > 0
-    } else {
-        productName.isNotBlank() && qty > 0 && price > 0 && (payment != PAY_CREDIT || customerName.isNotBlank())
-    }
-
-    val productSuggestions = if (productQuery.isBlank() || productQuery.trim() == productName) {
+    val productSuggestions = if (productQuery.isBlank() || productQuery == productName) {
         emptyList()
     } else {
         products.filter { it.name.contains(productQuery.trim(), ignoreCase = true) }.take(5).map { it.name }
@@ -237,6 +230,12 @@ fun SaleDialog(
     } else {
         customers.filter { it.name.contains(customerName, ignoreCase = true) && it.name != customerName }
             .take(5).map { it.name }
+    }
+
+    val valid = if (isCollect) {
+        customerName.isNotBlank() && amount > 0
+    } else {
+        productName.isNotBlank() && qty > 0 && price > 0 && (payment != PAY_CREDIT || customerName.isNotBlank())
     }
 
     AlertDialog(
@@ -279,7 +278,10 @@ fun SaleDialog(
                     SuggestField(
                         label = "ابحث عن المادة",
                         value = productQuery,
-                        onValueChange = { productQuery = it },
+                        onValueChange = {
+                            productQuery = it
+                            if (it != productName) productName = ""
+                        },
                         suggestions = productSuggestions,
                         onPick = { name ->
                             productName = name
@@ -299,7 +301,7 @@ fun SaleDialog(
                         OutlinedTextField(
                             value = priceText,
                             onValueChange = { priceText = it.filter(Char::isDigit) },
-                            label = { Text("السعر") },
+                            label = { Text("سعر الوحدة") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.weight(1f)
@@ -451,7 +453,7 @@ fun PurchaseDialog(
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
-                    label = { Text("ملاحظة") },
+                    label = { Text("ملاحظة (اختياري)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -622,8 +624,8 @@ fun ReportsScreen(repo: Repo) {
     var newProduct by remember { mutableStateOf("") }
     var newPrice by remember { mutableStateOf("") }
 
-    // Builds the tables on a background thread, then shares the file.
-    fun export(baseName: String, pdf: Boolean, build: () -> List<Section>) {
+    // Builds the file in the background, then opens the share sheet.
+    fun exportAndShare(baseName: String, pdf: Boolean, build: () -> List<Section>) {
         busy = true
         scope.launch {
             try {
@@ -641,7 +643,7 @@ fun ReportsScreen(repo: Repo) {
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (products.isEmpty() && customers.isEmpty()) {
             Button(
@@ -650,7 +652,7 @@ fun ReportsScreen(repo: Repo) {
             ) { Text("تحميل قائمة الأسعار والزبائن من الإكسل") }
         }
 
-        Text("تقرير بفترة محددة", fontWeight = FontWeight.Bold)
+        Text("تقرير لفترة محددة", fontWeight = FontWeight.Bold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DateButton("من", fromMs, Modifier.weight(1f)) { fromMs = it }
             DateButton("إلى", toMs, Modifier.weight(1f)) { toMs = it }
@@ -660,8 +662,7 @@ fun ReportsScreen(repo: Repo) {
                 enabled = !busy,
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    val label = "${dayKey(fromMs)}_${dayKey(toMs)}"
-                    export("report_$label", false) {
+                    exportAndShare("report_${dayKey(fromMs)}_${dayKey(toMs)}", false) {
                         buildSections(fromMs, endOfDay(toMs), sales, purchases, expenses, customers)
                     }
                 }
@@ -670,8 +671,7 @@ fun ReportsScreen(repo: Repo) {
                 enabled = !busy,
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    val label = "${dayKey(fromMs)}_${dayKey(toMs)}"
-                    export("report_$label", true) {
+                    exportAndShare("report_${dayKey(fromMs)}_${dayKey(toMs)}", true) {
                         buildSections(fromMs, endOfDay(toMs), sales, purchases, expenses, customers)
                     }
                 }
@@ -685,9 +685,9 @@ fun ReportsScreen(repo: Repo) {
                 enabled = !busy && statementCustomer.isNotBlank(),
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    val name = statementCustomer
-                    export("statement_${name}_${dayKey(toMs)}", false) {
-                        listOf(statementSection(name, sales, fromMs, endOfDay(toMs)))
+                    val who = statementCustomer
+                    exportAndShare("statement_${who}_${dayKey(System.currentTimeMillis())}", false) {
+                        listOf(statementSection(who, sales, fromMs, endOfDay(toMs)))
                     }
                 }
             ) { Text("كشف إكسل") }
@@ -695,14 +695,15 @@ fun ReportsScreen(repo: Repo) {
                 enabled = !busy && statementCustomer.isNotBlank(),
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    val name = statementCustomer
-                    export("statement_${name}_${dayKey(toMs)}", true) {
-                        listOf(statementSection(name, sales, fromMs, endOfDay(toMs)))
+                    val who = statementCustomer
+                    exportAndShare("statement_${who}_${dayKey(System.currentTimeMillis())}", true) {
+                        listOf(statementSection(who, sales, fromMs, endOfDay(toMs)))
                     }
                 }
             ) { Text("كشف PDF") }
         }
 
+        Text("نسخة احتياطية", fontWeight = FontWeight.Bold)
         Button(
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
@@ -711,8 +712,12 @@ fun ReportsScreen(repo: Repo) {
                 scope.launch {
                     try {
                         val saved = withContext(Dispatchers.IO) {
-                            val sections = buildSections(0L, Long.MAX_VALUE, sales, purchases, expenses, customers)
-                            saveToDownloads(context, exportSections(context, "backup_all", sections, false))
+                            val file = exportSections(
+                                context, "backup_all",
+                                buildSections(0L, Long.MAX_VALUE, sales, purchases, expenses, customers),
+                                false
+                            )
+                            saveToDownloads(context, file)
                         }
                         Toast.makeText(context, "تم الحفظ في Downloads: $saved", Toast.LENGTH_LONG).show()
                     } catch (e: Exception) {
