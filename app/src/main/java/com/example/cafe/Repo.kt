@@ -284,6 +284,12 @@ class Repo {
 
     suspend fun addItem(name: String, unit: String, opening: Long) {
         db.collection("items").add(mapOf("name" to name, "unit" to unit, "opening" to opening)).await()
+        // Employees can read only the product list, so every stock item is also listed there
+        // (same exact name, so sales match the stock). The owner sets its price later.
+        val existing = db.collection("products").whereEqualTo("name", name).get().await()
+        if (existing.isEmpty) {
+            db.collection("products").add(mapOf("name" to name, "price" to 0L)).await()
+        }
     }
 
     suspend fun addConsumption(date: Long, itemName: String, qty: Long, note: String) {

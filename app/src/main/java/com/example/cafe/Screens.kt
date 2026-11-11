@@ -246,7 +246,11 @@ fun SaleDialog(
     val productSuggestions = if (productQuery.isBlank() || productQuery == productName) {
         emptyList()
     } else {
-        products.filter { it.name.contains(productQuery.trim(), ignoreCase = true) }.take(5).map { it.name }
+        val q = productQuery.trim()
+        products.filter { it.name.contains(q, ignoreCase = true) }
+            .sortedBy { !it.name.startsWith(q, ignoreCase = true) }
+            .take(8)
+            .map { it.name }
     }
     val customerSuggestions = if (customerName.isBlank()) {
         emptyList()
