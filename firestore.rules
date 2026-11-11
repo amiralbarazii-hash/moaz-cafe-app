@@ -7,49 +7,56 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isOwner() {
-      return signedIn()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner';
+    function myRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
     }
 
-    // Profile: each user can read their own; owner reads all.
-    // A user can create only their own profile, and only with role "employee".
-    // Only the owner can change roles.
+    // Owner and manager: full access to records, customers and reports.
+    function isManager() {
+      return signedIn() && (myRole() == 'owner' || myRole() == 'manager');
+    }
+
+    // Owner only: roles, users and settings.
+    function isOwner() {
+      return signedIn() && myRole() == 'owner';
+    }
+
+    // Profile: each user reads their own; managers read all.
+    // A user creates only their own profile, and only with role "employee".
+    // Only the owner changes roles.
     match /users/{uid} {
-      allow read: if signedIn() && (request.auth.uid == uid || isOwner());
+      allow read: if signedIn() && (request.auth.uid == uid || isManager());
       allow create: if signedIn() && request.auth.uid == uid
                     && request.resource.data.role == 'employee';
       allow update, delete: if isOwner();
     }
 
-    // Price list: everyone reads, only owner edits.
+    // Price list: everyone signed in reads it (needed to record a sale); managers edit.
     match /products/{id} {
       allow read: if signedIn();
-      allow write: if isOwner();
+      allow write: if isManager();
     }
 
-    // Customers (credit accounts): any signed-in user can add or read.
+    // Customers: employees may add a new customer while recording a sale; only managers read or change them.
     match /customers/{id} {
-      allow read, write: if signedIn();
+      allow create: if signedIn();
+      allow read, update, delete: if isManager();
     }
 
-    // Records: an employee sees and creates only their own; only the owner edits or deletes.
+    // Records: employees only create (their own). Managers read, edit and delete everything.
     match /sales/{id} {
-      allow read: if signedIn() && (resource.data.employeeId == request.auth.uid || isOwner());
       allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
-      allow update, delete: if isOwner();
+      allow read, update, delete: if isManager();
     }
 
     match /purchases/{id} {
-      allow read: if signedIn() && (resource.data.employeeId == request.auth.uid || isOwner());
       allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
-      allow update, delete: if isOwner();
+      allow read, update, delete: if isManager();
     }
 
     match /expenses/{id} {
-      allow read: if signedIn() && (resource.data.employeeId == request.auth.uid || isOwner());
       allow create: if signedIn() && request.resource.data.employeeId == request.auth.uid;
-      allow update, delete: if isOwner();
+      allow read, update, delete: if isManager();
     }
   }
 }

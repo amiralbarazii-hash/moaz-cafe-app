@@ -156,7 +156,7 @@ fun MainScreen() {
         return
     }
 
-    val tabs = if (p.isOwner) {
+    val tabs = if (p.canManage) {
         listOf("المبيعات", "المشتريات", "المصروفات", "الزبائن", "التقارير")
     } else {
         listOf("المبيعات", "المشتريات", "المصروفات", "الزبائن")

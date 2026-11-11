@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -140,8 +141,8 @@ fun SuggestField(
 @Composable
 fun SalesScreen(repo: Repo, profile: Profile) {
     val products by remember { repo.products() }.collectAsState(initial = emptyList())
-    val customers by remember { repo.customers() }.collectAsState(initial = emptyList())
-    val sales by remember(profile.isOwner) { repo.sales(profile.isOwner) }.collectAsState(initial = emptyList())
+    val customers by remember(profile.canManage) { if (profile.canManage) repo.customers() else flowOf(emptyList()) }.collectAsState(initial = emptyList())
+    val sales by remember(profile.canManage) { if (profile.canManage) repo.sales(true) else flowOf(emptyList()) }.collectAsState(initial = emptyList())
     val pending by remember { repo.pendingCountFlow() }.collectAsState(initial = 0)
     var editing by remember { mutableStateOf<Sale?>(null) }
     val scope = rememberCoroutineScope()
@@ -161,7 +162,7 @@ fun SalesScreen(repo: Repo, profile: Profile) {
                 style = MaterialTheme.typography.bodySmall
             )
         }
-        Text(
+        if (profile.canManage) Text(
             "اليوم: كاش ${money(cash)} | على الحساب ${money(credit)} | تحصيل ${money(collect)}",
             fontWeight = FontWeight.Bold
         )
@@ -179,9 +180,9 @@ fun SalesScreen(repo: Repo, profile: Profile) {
                         (if (s.discount > 0) " - خصم ${money(s.discount)}" else "") +
                         (if (s.note.isNotBlank()) " - ${s.note}" else ""),
                     amount = money(s.total),
-                    canDelete = profile.isOwner,
+                    canDelete = profile.canManage,
                     onDelete = { scope.launch { repo.delete("sales", s.id) } },
-                    onEdit = if (profile.isOwner) ({ editing = s }) else null
+                    onEdit = if (profile.canManage) ({ editing = s }) else null
                 )
             }
         }
@@ -382,7 +383,7 @@ fun SaleDialog(
 
 @Composable
 fun PurchasesScreen(repo: Repo, profile: Profile) {
-    val purchases by remember(profile.isOwner) { repo.purchases(profile.isOwner) }
+    val purchases by remember(profile.canManage) { if (profile.canManage) repo.purchases(true) else flowOf(emptyList()) }
         .collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     var showForm by remember { mutableStateOf(false) }
@@ -391,7 +392,7 @@ fun PurchasesScreen(repo: Repo, profile: Profile) {
     val todayTotal = purchases.filter { dayKey(it.date) == today }.sumOf { it.amount }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        Text("مشتريات اليوم: ${money(todayTotal)} ل.س", fontWeight = FontWeight.Bold)
+        if (profile.canManage) Text("مشتريات اليوم: ${money(todayTotal)} ل.س", fontWeight = FontWeight.Bold)
         Button(
             onClick = { showForm = true },
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
@@ -404,7 +405,7 @@ fun PurchasesScreen(repo: Repo, profile: Profile) {
                     subtitle = dateOf(pu.date) + " - ${pu.category}" +
                         (if (pu.note.isNotBlank()) " - ${pu.note}" else ""),
                     amount = money(pu.amount),
-                    canDelete = profile.isOwner,
+                    canDelete = profile.canManage,
                     onDelete = { scope.launch { repo.delete("purchases", pu.id) } }
                 )
             }
@@ -495,7 +496,7 @@ fun PurchaseDialog(
 
 @Composable
 fun ExpensesScreen(repo: Repo, profile: Profile) {
-    val expenses by remember(profile.isOwner) { repo.expenses(profile.isOwner) }
+    val expenses by remember(profile.canManage) { if (profile.canManage) repo.expenses(true) else flowOf(emptyList()) }
         .collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     var showForm by remember { mutableStateOf(false) }
@@ -504,7 +505,7 @@ fun ExpensesScreen(repo: Repo, profile: Profile) {
     val todayTotal = expenses.filter { dayKey(it.date) == today }.sumOf { it.amount }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        Text("مصروفات اليوم: ${money(todayTotal)} ل.س", fontWeight = FontWeight.Bold)
+        if (profile.canManage) Text("مصروفات اليوم: ${money(todayTotal)} ل.س", fontWeight = FontWeight.Bold)
         Button(
             onClick = { showForm = true },
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
@@ -516,7 +517,7 @@ fun ExpensesScreen(repo: Repo, profile: Profile) {
                     title = ex.category,
                     subtitle = dateOf(ex.date) + (if (ex.note.isNotBlank()) " - ${ex.note}" else ""),
                     amount = money(ex.amount),
-                    canDelete = profile.isOwner,
+                    canDelete = profile.canManage,
                     onDelete = { scope.launch { repo.delete("expenses", ex.id) } }
                 )
             }
@@ -587,7 +588,7 @@ fun ExpenseDialog(
 @Composable
 fun CustomersScreen(repo: Repo, profile: Profile) {
     val customers by remember { repo.customers() }.collectAsState(initial = emptyList())
-    val sales by remember(profile.isOwner) { repo.sales(profile.isOwner) }.collectAsState(initial = emptyList())
+    val sales by remember(profile.canManage) { repo.sales(profile.canManage) }.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     var newName by remember { mutableStateOf("") }
 

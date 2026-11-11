@@ -40,6 +40,8 @@ val DEFAULT_CUSTOMERS = listOf(
 
 data class Profile(val uid: String, val email: String, val role: String) {
     val isOwner: Boolean get() = role == "owner"
+    /** Owner and manager: full access. Employees only record sales, purchases and expenses. */
+    val canManage: Boolean get() = role == "owner" || role == "manager"
 }
 
 data class Product(val id: String, val name: String, val price: Long)
